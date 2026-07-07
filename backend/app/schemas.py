@@ -1,13 +1,21 @@
 from pydantic import BaseModel
+from typing import List
 
-class CourseCreate(BaseModel):
+
+class CourseBase(BaseModel):
     code: str
     title: str
 
-class CourseOut(BaseModel):
+
+# Used when returning courses
+class CourseResponse(CourseBase):
     id: int
-    code: str
-    title: str
+    prerequisites: List["CourseResponse"] = []
 
     class Config:
         from_attributes = True
+
+
+# Used when creating courses
+class CourseCreate(CourseBase):
+    prerequisite_ids: List[int] = []

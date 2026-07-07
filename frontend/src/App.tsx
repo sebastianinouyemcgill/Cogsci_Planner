@@ -1,29 +1,32 @@
-import { useEffect, useState } from "react";
-import type { Course } from "./types/course";
-import { getCourses } from "./api/courses";
-import CourseForm from "./components/CourseForm";
-import CourseList from "./components/CourseList";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+} from "react-router-dom";
+
+import CourseCatalog from "./pages/CourseCatalog";
+import Planner from "./pages/Planner";
+
 
 function App() {
-  const [courses, setCourses] = useState<Course[]>([]);
-
-  async function loadCourses() {
-    const data = await getCourses();
-    setCourses(data);
-  }
-
-  useEffect(() => {
-    loadCourses();
-  }, []);
-
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Course Planner</h1>
+    <BrowserRouter>
 
-      <CourseForm onCourseAdded={loadCourses} />
+      <Routes>
 
-      <CourseList courses={courses} />
-    </div>
+        <Route
+          path="/courses"
+          element={<CourseCatalog />}
+        />
+
+        <Route
+          path="/planner"
+          element={<Planner />}
+        />
+
+      </Routes>
+
+    </BrowserRouter>
   );
 }
 
