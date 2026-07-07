@@ -1,45 +1,28 @@
 import { useEffect, useState } from "react";
-
-type Course = {
-  id: number;
-  code: string;
-  title: string;
-};
+import type { Course } from "./types/course";
+import { getCourses } from "./api/courses";
+import CourseForm from "./components/CourseForm";
+import CourseList from "./components/CourseList";
 
 function App() {
   const [courses, setCourses] = useState<Course[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  async function loadCourses() {
+    const data = await getCourses();
+    setCourses(data);
+  }
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/courses")
-      .then((res) => res.json())
-      .then((data) => {
-        setCourses(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error(err);
-        setLoading(false);
-      });
+    loadCourses();
   }, []);
 
   return (
     <div style={{ padding: 20 }}>
       <h1>Course Planner</h1>
 
-      {loading ? (
-        <p>Loading...</p>
-      ) : courses.length === 0 ? (
-        <p>No courses yet</p>
-      ) : (
-        <ul>
-          {courses.map((course) => (
-            <li key={course.id}>
-              {course.code} — {course.title}
-            </li>
-          ))}
-        </ul>
-      )}
+      <CourseForm onCourseAdded={loadCourses} />
+
+      <CourseList courses={courses} />
     </div>
   );
 }
