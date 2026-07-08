@@ -9,10 +9,16 @@ import CourseList from "../components/CourseList";
 
 function CourseCatalog() {
   const [courses, setCourses] = useState<Course[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   async function loadCourses() {
-    const data = await getCourses();
-    setCourses(data);
+    try {
+      setError(null);
+      const data = await getCourses();
+      setCourses(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load courses");
+    }
   }
 
   useEffect(() => {
@@ -22,6 +28,7 @@ function CourseCatalog() {
   return (
     <div style={{ padding: 20 }}>
       <h1>Course Planner</h1>
+      {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
 
       <CourseForm onCourseAdded={loadCourses} />
 

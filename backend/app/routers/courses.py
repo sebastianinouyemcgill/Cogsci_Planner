@@ -35,7 +35,12 @@ def create_course(
     new_course = Course(
         code=course.code,
         title=course.title,
-        prerequisites=prerequisites
+        description=course.description,
+        credits=course.credits,
+        level=course.level,
+        faculty=course.faculty,
+        department=course.department,
+        prerequisites=prerequisites,
     )
 
     db.add(new_course)

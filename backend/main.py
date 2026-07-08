@@ -1,10 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 import time
 
-from app.database import Base, engine
-from app.routes.courses import router as courses_router
+from alembic import command
+from alembic.config import Config
+
+from app.database import engine
+from app.routers.courses import router as courses_router
+from app.routers.requirements import router as requirements_router
 
 
 app = FastAPI()
@@ -22,13 +27,14 @@ app.add_middleware(
 )
 
 
-def init_db():
+def wait_for_db():
     retries = 10
 
     for i in range(retries):
         try:
-            Base.metadata.create_all(bind=engine)
-            print("Database connected + tables created")
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            print("Database connected")
             return
         except OperationalError:
             print(f"Waiting for DB... {i+1}/{retries}")
@@ -37,10 +43,20 @@ def init_db():
     raise Exception("Could not connect to database")
 
 
-init_db()
+def run_migrations():
+    # Schema is managed by Alembic (see backend/alembic). Running the
+    # migrations on startup keeps the dev container's schema up to date.
+    config = Config("alembic.ini")
+    command.upgrade(config, "head")
+    print("Migrations applied")
+
+
+wait_for_db()
+run_migrations()
 
 
 app.include_router(courses_router)
+app.include_router(requirements_router)
 
 
 @app.get("/")
