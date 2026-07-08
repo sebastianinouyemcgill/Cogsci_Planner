@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Area, Course, Stream
+from app.models import Area, Course, Requirement, Stream
 from app.schemas import (
     AreasProgress,
     ArtsScienceProgress,
@@ -54,11 +54,22 @@ def _build_response(
     required_areas = [a.name for a in db.query(Area).all()]
     stream_names = [s.name for s in db.query(Stream).all()]
 
+    stream_req = db.query(Requirement).filter(Requirement.type == "stream").first()
+    complementary_req = (
+        db.query(Requirement).filter(Requirement.type == "complementary").first()
+    )
+
+    stream_credit_required = stream_req.credits_required if stream_req else 18
+    complementary_credit_required = (
+        complementary_req.credits_required if complementary_req else 12
+    )
+
     db_courses = []
     if payload.completed_course_ids:
         db_courses = (
             db.query(Course)
             .filter(Course.id.in_(payload.completed_course_ids))
+            .order_by(Course.id.asc())
             .all()
         )
 
@@ -89,8 +100,8 @@ def _build_response(
         all_completed_courses=completed,
         required_areas=required_areas,
         eligible_streams=stream_names,
-        stream_credit_required=18,
-        complementary_credit_required=12,
+        stream_credit_required=stream_credit_required,
+        complementary_credit_required=complementary_credit_required,
         level_threshold=400,
     )
 
