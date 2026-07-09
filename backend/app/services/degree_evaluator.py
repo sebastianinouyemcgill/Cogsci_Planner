@@ -7,6 +7,44 @@ from typing import Dict, Iterable, List, Literal, Optional, Sequence, Set, Tuple
 FacultyName = Literal["Arts", "Science"]
 StreamName = str
 AreaName = str
+BucketOverride = str
+COMPLEMENTARY_BUCKET_LABEL = "Complementary"
+
+
+class InvalidBucketOverrideError(ValueError):
+    """Raised when a requested bucket override cannot be honored."""
+
+    def __init__(
+        self,
+        *,
+        course_id: int,
+        course_code: str,
+        bucket_override: str,
+        reason: str,
+    ) -> None:
+        self.course_id = course_id
+        self.course_code = course_code
+        self.bucket_override = bucket_override
+        self.reason = reason
+        super().__init__(
+            f"Invalid bucket_override for {course_code} (course_id={course_id}): "
+            f"{bucket_override!r} — {reason}"
+        )
+
+
+class InvalidDeclaredStreamError(ValueError):
+    """Raised when a declared stream name is not a valid stream."""
+
+    def __init__(self, *, declared_stream: str, eligible_streams: Sequence[str]) -> None:
+        self.declared_stream = declared_stream
+        self.eligible_streams = list(eligible_streams)
+        allowed = ", ".join(eligible_streams) if eligible_streams else "none"
+        super().__init__(
+            f"Invalid declared_stream {declared_stream!r} — allowed streams: {allowed}"
+        )
+
+
+ELECTIVES_BUCKET_KEY = "electives"
 
 
 @dataclass(frozen=True)
@@ -40,6 +78,38 @@ class CompletedCourse:
     # Used for required cognitive science area completion.
     eligible_areas: Sequence[AreaName] = ()
 
+    # True for seeded courses with no real stream home that should be surfaced
+    # as Electives if they are not consumed by an Area.
+    elective_only: bool = False
+
+    # When True, Arts/Science credit may be assigned to either faculty bucket
+    # during evaluation (whichever benefits the student most).
+    flexible_faculty: bool = False
+
+
+@dataclass(frozen=True)
+class CourseAllocationDetail:
+    eligible_buckets: List[str]
+    allocated_bucket: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class OfficialStreamComplementaryAllocation:
+    """
+    Official allocation for a declared (or provisionally chosen) stream.
+
+    Separate from the explore-all-streams `StreamComplementaryAllocation`.
+    """
+
+    declared_stream: Optional[StreamName]
+    stream_is_provisional: bool
+    provisional_stream: Optional[StreamName]
+    stream_credits: int
+    complementary_credits: int
+    course_bucket: Dict[int, str]
+    course_allocations: Dict[int, CourseAllocationDetail]
+    elective_overflow_course_ids: Set[int]
+
 
 @dataclass(frozen=True)
 class StreamComplementaryAllocation:
@@ -59,6 +129,28 @@ class StreamComplementaryAllocation:
 
     stream_credits: Dict[StreamName, int]
     complementary_credits: int
+    course_allocations: Dict[int, CourseAllocationDetail]
+
+
+@dataclass(frozen=True)
+class AreaAllocation:
+    """
+    Result of consuming at most one course per required Area.
+    """
+
+    # area_name -> course_id
+    area_course_ids: Dict[AreaName, int]
+    consumed_course_ids: Set[int]
+
+    @property
+    def completed_areas(self) -> Set[AreaName]:
+        return set(self.area_course_ids)
+
+
+@dataclass(frozen=True)
+class ElectivesAllocation:
+    credits: int
+    course_ids: List[int]
 
 
 @dataclass(frozen=True)
@@ -80,9 +172,15 @@ class ProgressSnapshot:
     # Allocations used by the stream/complementary bucket logic.
     stream_complementary: StreamComplementaryAllocation
 
-    # Area completion is computed without consuming credits from other
-    # requirement buckets in the progress calculations.
+    # Official declared/provisional stream + complementary allocation.
+    official_stream_complementary: OfficialStreamComplementaryAllocation
+
+    # Area completion consumes one deterministic course per area.
     completed_areas: Set[AreaName]
+    area_course_ids: Dict[AreaName, int]
+
+    # Elective-only courses that were not consumed by an Area.
+    electives: ElectivesAllocation
 
 
 def calculate_arts_science_totals(
@@ -90,18 +188,35 @@ def calculate_arts_science_totals(
 ) -> ArtsScienceTotals:
     """
     Calculate Arts/Science totals from *all* completed courses (CogSci + non-major).
+
+    Courses with `flexible_faculty=True` are assigned to whichever bucket is
+    currently lower so the student gets the most benefit (e.g. COGS 444 toward
+    Arts when Arts credits are harder to fill).
     """
 
-    arts = 0
-    science = 0
+    fixed_arts = 0
+    fixed_science = 0
+    flexible_courses: List[CompletedCourse] = []
+
     for course in all_completed_courses:
+        if course.flexible_faculty:
+            flexible_courses.append(course)
+            continue
         if course.faculty == "Arts":
-            arts += course.credits
+            fixed_arts += course.credits
         elif course.faculty == "Science":
-            science += course.credits
+            fixed_science += course.credits
         else:
-            # Defensive: type should prevent this.
             raise ValueError(f"Unknown faculty: {course.faculty}")
+
+    arts = fixed_arts
+    science = fixed_science
+    for course in sorted(flexible_courses, key=lambda c: (c.code, c.id)):
+        if arts <= science:
+            arts += course.credits
+        else:
+            science += course.credits
+
     return ArtsScienceTotals(arts_credits=arts, science_credits=science)
 
 
@@ -125,6 +240,101 @@ def calculate_400_plus_progress(
     return credits, eligible
 
 
+def course_eligible_buckets(
+    course: CompletedCourse,
+    *,
+    eligible_streams: Sequence[StreamName],
+) -> List[str]:
+    """
+    Buckets a course may be assigned to in the stream/complementary pool.
+    """
+
+    stream_buckets = [s for s in course.eligible_streams if s in eligible_streams]
+    if not stream_buckets:
+        return []
+    return sorted(
+        [*stream_buckets, COMPLEMENTARY_BUCKET_LABEL],
+        key=lambda bucket: (bucket == COMPLEMENTARY_BUCKET_LABEL, bucket),
+    )
+
+
+def _normalize_override_to_bucket_key(
+    bucket_override: BucketOverride,
+    course: CompletedCourse,
+    *,
+    eligible_streams: Sequence[StreamName],
+) -> str:
+    if bucket_override == COMPLEMENTARY_BUCKET_LABEL:
+        if not course_eligible_buckets(course, eligible_streams=eligible_streams):
+            raise InvalidBucketOverrideError(
+                course_id=course.id,
+                course_code=course.code,
+                bucket_override=bucket_override,
+                reason="course is not in the stream/complementary pool",
+            )
+        return "complementary"
+
+    if (
+        bucket_override in eligible_streams
+        and bucket_override in course.eligible_streams
+    ):
+        return f"stream:{bucket_override}"
+
+    allowed = course_eligible_buckets(course, eligible_streams=eligible_streams)
+    allowed_text = ", ".join(allowed) if allowed else "none"
+    raise InvalidBucketOverrideError(
+        course_id=course.id,
+        course_code=course.code,
+        bucket_override=bucket_override,
+        reason=f"allowed buckets are: {allowed_text}",
+    )
+
+
+def validate_bucket_overrides(
+    *,
+    all_completed_courses: Sequence[CompletedCourse],
+    remaining_courses: Sequence[CompletedCourse],
+    area_consumed_course_ids: Set[int],
+    bucket_overrides: Dict[int, BucketOverride],
+    eligible_streams: Sequence[StreamName],
+) -> None:
+    courses_by_id = {course.id: course for course in all_completed_courses}
+    pool_course_ids = {
+        course.id
+        for course in remaining_courses
+        if course_eligible_buckets(course, eligible_streams=eligible_streams)
+    }
+
+    for course_id, bucket_override in bucket_overrides.items():
+        course = courses_by_id.get(course_id)
+        if course is None:
+            raise InvalidBucketOverrideError(
+                course_id=course_id,
+                course_code="?",
+                bucket_override=bucket_override,
+                reason="course is not in the evaluation set",
+            )
+        if course_id in area_consumed_course_ids:
+            raise InvalidBucketOverrideError(
+                course_id=course_id,
+                course_code=course.code,
+                bucket_override=bucket_override,
+                reason="course is consumed by an area requirement",
+            )
+        if course_id not in pool_course_ids:
+            raise InvalidBucketOverrideError(
+                course_id=course_id,
+                course_code=course.code,
+                bucket_override=bucket_override,
+                reason="course is not in the stream/complementary pool",
+            )
+        _normalize_override_to_bucket_key(
+            bucket_override,
+            course,
+            eligible_streams=eligible_streams,
+        )
+
+
 def allocate_streams_and_complementary_greedy_v1(
     courses: Sequence[CompletedCourse],
     *,
@@ -133,6 +343,7 @@ def allocate_streams_and_complementary_greedy_v1(
     # Complementary requirement credits (e.g. 12).
     complementary_credit_required: int,
     eligible_streams: Sequence[StreamName],
+    bucket_overrides: Optional[Dict[int, BucketOverride]] = None,
 ) -> StreamComplementaryAllocation:
     """
     Greedy v1 allocation strategy (documented heuristic).
@@ -157,11 +368,54 @@ def allocate_streams_and_complementary_greedy_v1(
     under-allocates compared to a global optimum.
     """
 
+    overrides = bucket_overrides or {}
+
     # Initialize per-stream credit tallies.
     stream_credits: Dict[StreamName, int] = {s: 0 for s in eligible_streams}
     complementary_credits = 0
 
     course_bucket: Dict[int, str] = {}
+    course_allocations: Dict[int, CourseAllocationDetail] = {}
+
+    pool_courses = [
+        course
+        for course in courses
+        if course_eligible_buckets(course, eligible_streams=eligible_streams)
+    ]
+    for course in pool_courses:
+        course_allocations[course.id] = CourseAllocationDetail(
+            eligible_buckets=course_eligible_buckets(
+                course, eligible_streams=eligible_streams
+            )
+        )
+
+    def apply_bucket(course: CompletedCourse, bucket_key: str) -> None:
+        nonlocal complementary_credits
+        course_bucket[course.id] = bucket_key
+        detail = course_allocations[course.id]
+        course_allocations[course.id] = CourseAllocationDetail(
+            eligible_buckets=detail.eligible_buckets,
+            allocated_bucket=bucket_key,
+        )
+        if bucket_key == "complementary":
+            complementary_credits += course.credits
+            return
+        stream_name = bucket_key.removeprefix("stream:")
+        stream_credits[stream_name] += course.credits
+
+    # Pin explicit overrides before running the greedy heuristic.
+    auto_allocate_courses: List[CompletedCourse] = []
+    for course in pool_courses:
+        override = overrides.get(course.id)
+        if override is not None:
+            bucket_key = _normalize_override_to_bucket_key(
+                override,
+                course,
+                eligible_streams=eligible_streams,
+            )
+            apply_bucket(course, bucket_key)
+            continue
+        auto_allocate_courses.append(course)
 
     def stream_remaining(stream: StreamName) -> int:
         return max(0, stream_credit_required - stream_credits.get(stream, 0))
@@ -169,78 +423,394 @@ def allocate_streams_and_complementary_greedy_v1(
     def is_stream_partially_finished(stream: StreamName) -> bool:
         return stream_remaining(stream) > 0
 
-    for course in courses:
-        # Complementary's pool is the SAME pool as streams: any course with
-        # eligible stream tags can go to streams or complementary buckets.
+    for course in auto_allocate_courses:
         candidates_streams = [s for s in course.eligible_streams if s in stream_credits]
-
-        # IMPORTANT: In v1, stream/complementary allocation does not exclude
-        # courses that are also eligible for a required Area.
-        # - Area completion is computed separately as a presence check.
-        # - This avoids an accidental gap when the course catalog expands.
-        # Phase 2 is where we can enforce any future mutual-exclusivity policy
-        # across Area vs Stream if desired.
         if not candidates_streams:
             continue
 
-        # 1) Try partially-finished streams first.
-        partially_finished = [s for s in candidates_streams if is_stream_partially_finished(s)]
+        partially_finished = [
+            s for s in candidates_streams if is_stream_partially_finished(s)
+        ]
         chosen: Optional[StreamName] = None
         if partially_finished:
-            # 2) Choose least credits remaining.
             chosen = sorted(partially_finished, key=lambda s: (stream_remaining(s), s))[0]
 
         if chosen is not None:
-            bucket = f"stream:{chosen}"
-            course_bucket[course.id] = bucket
-            stream_credits[chosen] += course.credits
+            apply_bucket(course, f"stream:{chosen}")
             continue
 
-        # 3) No partially-finished eligible streams remain => complementary.
         if complementary_credits < complementary_credit_required:
-            course_bucket[course.id] = "complementary"
-            complementary_credits += course.credits
+            apply_bucket(course, "complementary")
             continue
-
-        # If complementary is also satisfied, we leave the course unallocated
-        # (it still may satisfy independent requirements like 400+).
 
     return StreamComplementaryAllocation(
         course_bucket=course_bucket,
         stream_credits=stream_credits,
         complementary_credits=complementary_credits,
+        course_allocations=course_allocations,
+    )
+
+
+def _official_stream_credits_for_bucket(
+    courses: Sequence[CompletedCourse],
+    course_bucket: Dict[int, str],
+    *,
+    primary_stream: StreamName,
+) -> int:
+    primary_key = f"stream:{primary_stream}"
+    return sum(
+        course.credits
+        for course in courses
+        if course_bucket.get(course.id) == primary_key
+    )
+
+
+def _official_complementary_credits_for_bucket(
+    courses: Sequence[CompletedCourse],
+    course_bucket: Dict[int, str],
+) -> int:
+    return sum(
+        course.credits
+        for course in courses
+        if course_bucket.get(course.id) == "complementary"
+    )
+
+
+def allocate_official_stream_complementary_v1(
+    courses: Sequence[CompletedCourse],
+    *,
+    primary_stream: StreamName,
+    stream_credit_required: int,
+    complementary_credit_required: int,
+    eligible_streams: Sequence[StreamName],
+    bucket_overrides: Optional[Dict[int, BucketOverride]] = None,
+) -> OfficialStreamComplementaryAllocation:
+    """
+    Official allocation for a declared or provisionally chosen primary stream.
+
+    - Courses eligible for `primary_stream` fill that stream bucket first (up to
+      the stream cap for auto-allocated courses).
+    - Remaining pool courses fill Complementary (up to its cap for auto).
+    - Further pool overflow flows to the shared Electives bucket.
+    - Explicit bucket overrides are honored first and may exceed caps.
+    """
+
+    overrides = bucket_overrides or {}
+    course_bucket: Dict[int, str] = {}
+    course_allocations: Dict[int, CourseAllocationDetail] = {}
+
+    pool_courses = [
+        course
+        for course in courses
+        if course_eligible_buckets(course, eligible_streams=eligible_streams)
+    ]
+    for course in pool_courses:
+        course_allocations[course.id] = CourseAllocationDetail(
+            eligible_buckets=course_eligible_buckets(
+                course, eligible_streams=eligible_streams
+            )
+        )
+
+    stream_credits = 0
+    complementary_credits = 0
+
+    def apply_bucket(course: CompletedCourse, bucket_key: str) -> None:
+        nonlocal stream_credits, complementary_credits
+        course_bucket[course.id] = bucket_key
+        detail = course_allocations[course.id]
+        course_allocations[course.id] = CourseAllocationDetail(
+            eligible_buckets=detail.eligible_buckets,
+            allocated_bucket=bucket_key,
+        )
+
+    # Pin explicit overrides before running the official heuristic.
+    auto_allocate_courses: List[CompletedCourse] = []
+    for course in pool_courses:
+        override = overrides.get(course.id)
+        if override is not None:
+            bucket_key = _normalize_override_to_bucket_key(
+                override,
+                course,
+                eligible_streams=eligible_streams,
+            )
+            apply_bucket(course, bucket_key)
+            continue
+        auto_allocate_courses.append(course)
+
+    primary_key = f"stream:{primary_stream}"
+    stream_credits = _official_stream_credits_for_bucket(
+        pool_courses, course_bucket, primary_stream=primary_stream
+    )
+    complementary_credits = _official_complementary_credits_for_bucket(
+        pool_courses, course_bucket
+    )
+
+    for course in sorted(auto_allocate_courses, key=lambda c: (c.code, c.id)):
+        if course.id in course_bucket:
+            continue
+
+        if (
+            primary_stream in course.eligible_streams
+            and stream_credits < stream_credit_required
+        ):
+            apply_bucket(course, primary_key)
+            stream_credits += course.credits
+            continue
+
+        if complementary_credits < complementary_credit_required:
+            apply_bucket(course, "complementary")
+            complementary_credits += course.credits
+            continue
+
+        apply_bucket(course, ELECTIVES_BUCKET_KEY)
+
+    elective_overflow_course_ids = {
+        course.id
+        for course in pool_courses
+        if course_bucket.get(course.id) == ELECTIVES_BUCKET_KEY
+    }
+
+    return OfficialStreamComplementaryAllocation(
+        declared_stream=primary_stream,
+        stream_is_provisional=False,
+        provisional_stream=None,
+        stream_credits=_official_stream_credits_for_bucket(
+            pool_courses, course_bucket, primary_stream=primary_stream
+        ),
+        complementary_credits=_official_complementary_credits_for_bucket(
+            pool_courses, course_bucket
+        ),
+        course_bucket=course_bucket,
+        course_allocations=course_allocations,
+        elective_overflow_course_ids=elective_overflow_course_ids,
+    )
+
+
+def _official_completion_score(
+    allocation: OfficialStreamComplementaryAllocation,
+    *,
+    stream_credit_required: int,
+    complementary_credit_required: int,
+) -> Tuple[int, int, str]:
+    capped_stream = min(allocation.stream_credits, stream_credit_required)
+    capped_comp = min(
+        allocation.complementary_credits, complementary_credit_required
+    )
+    return (
+        capped_stream + capped_comp,
+        allocation.stream_credits,
+        allocation.declared_stream or "",
+    )
+
+
+def allocate_official_with_declared_or_provisional_stream(
+    courses: Sequence[CompletedCourse],
+    *,
+    declared_stream: Optional[StreamName],
+    stream_credit_required: int,
+    complementary_credit_required: int,
+    eligible_streams: Sequence[StreamName],
+    bucket_overrides: Optional[Dict[int, BucketOverride]] = None,
+) -> OfficialStreamComplementaryAllocation:
+    """
+    Run official allocation for an explicit declared stream, or pick the
+    provisional stream that maximizes combined Stream+Complementary progress.
+    """
+
+    if declared_stream is not None:
+        if declared_stream not in eligible_streams:
+            raise InvalidDeclaredStreamError(
+                declared_stream=declared_stream,
+                eligible_streams=eligible_streams,
+            )
+        result = allocate_official_stream_complementary_v1(
+            courses,
+            primary_stream=declared_stream,
+            stream_credit_required=stream_credit_required,
+            complementary_credit_required=complementary_credit_required,
+            eligible_streams=eligible_streams,
+            bucket_overrides=bucket_overrides,
+        )
+        return OfficialStreamComplementaryAllocation(
+            declared_stream=declared_stream,
+            stream_is_provisional=False,
+            provisional_stream=None,
+            stream_credits=result.stream_credits,
+            complementary_credits=result.complementary_credits,
+            course_bucket=result.course_bucket,
+            course_allocations=result.course_allocations,
+            elective_overflow_course_ids=result.elective_overflow_course_ids,
+        )
+
+    best_allocation: Optional[OfficialStreamComplementaryAllocation] = None
+    best_score: Tuple[int, int, str] = (-1, -1, "")
+
+    for stream in eligible_streams:
+        candidate = allocate_official_stream_complementary_v1(
+            courses,
+            primary_stream=stream,
+            stream_credit_required=stream_credit_required,
+            complementary_credit_required=complementary_credit_required,
+            eligible_streams=eligible_streams,
+            bucket_overrides=bucket_overrides,
+        )
+        score = _official_completion_score(
+            candidate,
+            stream_credit_required=stream_credit_required,
+            complementary_credit_required=complementary_credit_required,
+        )
+        if score > best_score:
+            best_score = score
+            best_allocation = candidate
+
+    if best_allocation is None:
+        return OfficialStreamComplementaryAllocation(
+            declared_stream=None,
+            stream_is_provisional=True,
+            provisional_stream=None,
+            stream_credits=0,
+            complementary_credits=0,
+            course_bucket={},
+            course_allocations={},
+            elective_overflow_course_ids=set(),
+        )
+
+    return OfficialStreamComplementaryAllocation(
+        declared_stream=None,
+        stream_is_provisional=True,
+        provisional_stream=best_allocation.declared_stream,
+        stream_credits=best_allocation.stream_credits,
+        complementary_credits=best_allocation.complementary_credits,
+        course_bucket=best_allocation.course_bucket,
+        course_allocations=best_allocation.course_allocations,
+        elective_overflow_course_ids=best_allocation.elective_overflow_course_ids,
+    )
+
+
+def allocate_areas_greedy_v1(
+    all_completed_courses: Sequence[CompletedCourse],
+    *,
+    required_areas: Sequence[AreaName],
+) -> AreaAllocation:
+    """
+    Choose exactly one course for each completed Area.
+
+    Deterministic tie-break: lowest course code, then ID. A course can satisfy
+    at most one Area.
+    """
+
+    area_course_ids: Dict[AreaName, int] = {}
+    consumed_course_ids: Set[int] = set()
+
+    for area in required_areas:
+        candidates = sorted(
+            (
+                course
+                for course in all_completed_courses
+                if course.id not in consumed_course_ids
+                and area in course.eligible_areas
+            ),
+            key=lambda course: (course.code, course.id),
+        )
+        if not candidates:
+            continue
+
+        chosen = candidates[0]
+        area_course_ids[area] = chosen.id
+        consumed_course_ids.add(chosen.id)
+
+    return AreaAllocation(
+        area_course_ids=area_course_ids,
+        consumed_course_ids=consumed_course_ids,
     )
 
 
 def calculate_completed_areas(
-    all_completed_courses: Iterable[CompletedCourse],
+    all_completed_courses: Sequence[CompletedCourse],
     *,
     required_areas: Sequence[AreaName],
 ) -> Set[AreaName]:
     """
-    Compute which required areas are complete.
-
-    Area completion is a progress calculation and does not consume credits from
-    stream/complementary buckets.
-
-    Area/stream overlap clarification:
-    - If in the expanded course catalog a course is eligible for BOTH an Area
-      and a Stream, this function will still mark the Area complete if the
-      course appears in `all_completed_courses`.
-    - Stream/complementary allocation happens independently and should NOT
-      silently ignore area/stream overlaps; the allocation model will be
-      explicitly decided in Phase 2 allocation logic.
-
-    For now, this function is purely a presence check for each required area.
+    Compatibility helper for callers that only need completed Area names.
     """
 
-    required: Set[AreaName] = set(required_areas)
-    completed: Set[AreaName] = set()
-    for course in all_completed_courses:
-        for area in course.eligible_areas:
-            if area in required:
-                completed.add(area)
-    return completed
+    return allocate_areas_greedy_v1(
+        all_completed_courses,
+        required_areas=required_areas,
+    ).completed_areas
+
+
+def allocate_electives(
+    courses: Iterable[CompletedCourse],
+    *,
+    official_elective_overflow_ids: Optional[Set[int]] = None,
+) -> ElectivesAllocation:
+    """
+    Track elective-only courses and official stream-pool overflow so credits
+    remain visible in a single Electives bucket.
+    """
+
+    overflow_ids = official_elective_overflow_ids or set()
+    credits = 0
+    course_ids: List[int] = []
+    for course in sorted(courses, key=lambda c: (c.code, c.id)):
+        if course.elective_only:
+            credits += course.credits
+            course_ids.append(course.id)
+        elif course.id in overflow_ids:
+            credits += course.credits
+            course_ids.append(course.id)
+    return ElectivesAllocation(credits=credits, course_ids=course_ids)
+
+
+@dataclass(frozen=True)
+class DualProgressSnapshot:
+    """Completed-only and completed+planned progress from the same evaluator."""
+
+    completed: ProgressSnapshot
+    projected: ProgressSnapshot
+
+
+def evaluate_degree_progress_completed_and_projected(
+    *,
+    completed_only_courses: Sequence[CompletedCourse],
+    completed_and_planned_courses: Sequence[CompletedCourse],
+    required_areas: Sequence[AreaName],
+    eligible_streams: Sequence[StreamName],
+    stream_credit_required: int,
+    complementary_credit_required: int,
+    level_threshold: int = 400,
+    declared_stream: Optional[StreamName] = None,
+    completed_bucket_overrides: Optional[Dict[int, BucketOverride]] = None,
+    projected_bucket_overrides: Optional[Dict[int, BucketOverride]] = None,
+) -> DualProgressSnapshot:
+    """
+    Run the v1 greedy evaluator twice:
+    1. `completed` — courses with status == completed (plus manual entries).
+    2. `projected` — completed OR planned courses combined.
+    """
+
+    common_kwargs = {
+        "required_areas": required_areas,
+        "eligible_streams": eligible_streams,
+        "stream_credit_required": stream_credit_required,
+        "complementary_credit_required": complementary_credit_required,
+        "level_threshold": level_threshold,
+        "declared_stream": declared_stream,
+    }
+
+    return DualProgressSnapshot(
+        completed=evaluate_degree_progress_greedy_v1(
+            all_completed_courses=completed_only_courses,
+            bucket_overrides=completed_bucket_overrides,
+            **common_kwargs,
+        ),
+        projected=evaluate_degree_progress_greedy_v1(
+            all_completed_courses=completed_and_planned_courses,
+            bucket_overrides=projected_bucket_overrides,
+            **common_kwargs,
+        ),
+    )
 
 
 def evaluate_degree_progress_greedy_v1(
@@ -251,6 +821,8 @@ def evaluate_degree_progress_greedy_v1(
     stream_credit_required: int,
     complementary_credit_required: int,
     level_threshold: int = 400,
+    declared_stream: Optional[StreamName] = None,
+    bucket_overrides: Optional[Dict[int, BucketOverride]] = None,
 ) -> ProgressSnapshot:
     """
     v1 evaluator wrapper combining:
@@ -267,17 +839,47 @@ def evaluate_degree_progress_greedy_v1(
         all_completed_courses, level_threshold=level_threshold
     )
 
-    # Stream/complementary allocation operates on the full list, but the
-    # allocator itself only considers stream-tagged courses.
-    stream_comp = allocate_streams_and_complementary_greedy_v1(
-        all_completed_courses,
-        stream_credit_required=stream_credit_required,
-        complementary_credit_required=complementary_credit_required,
+    area_allocation = allocate_areas_greedy_v1(
+        all_completed_courses, required_areas=required_areas
+    )
+
+    # Area-consumed courses do not also flow into the mutually-exclusive
+    # stream/complementary/electives buckets.
+    remaining_courses = [
+        course
+        for course in all_completed_courses
+        if course.id not in area_allocation.consumed_course_ids
+    ]
+
+    overrides = bucket_overrides or {}
+    validate_bucket_overrides(
+        all_completed_courses=all_completed_courses,
+        remaining_courses=remaining_courses,
+        area_consumed_course_ids=area_allocation.consumed_course_ids,
+        bucket_overrides=overrides,
         eligible_streams=eligible_streams,
     )
 
-    completed_areas = calculate_completed_areas(
-        all_completed_courses, required_areas=required_areas
+    stream_comp = allocate_streams_and_complementary_greedy_v1(
+        remaining_courses,
+        stream_credit_required=stream_credit_required,
+        complementary_credit_required=complementary_credit_required,
+        eligible_streams=eligible_streams,
+        bucket_overrides=overrides,
+    )
+
+    official_stream_comp = allocate_official_with_declared_or_provisional_stream(
+        remaining_courses,
+        declared_stream=declared_stream,
+        stream_credit_required=stream_credit_required,
+        complementary_credit_required=complementary_credit_required,
+        eligible_streams=eligible_streams,
+        bucket_overrides=overrides,
+    )
+
+    electives = allocate_electives(
+        remaining_courses,
+        official_elective_overflow_ids=official_stream_comp.elective_overflow_course_ids,
     )
 
     return ProgressSnapshot(
@@ -285,6 +887,9 @@ def evaluate_degree_progress_greedy_v1(
         credits_400_plus=credits_400_plus,
         eligible_courses_400_plus=eligible_ids_400_plus,
         stream_complementary=stream_comp,
-        completed_areas=completed_areas,
+        official_stream_complementary=official_stream_comp,
+        completed_areas=area_allocation.completed_areas,
+        area_course_ids=area_allocation.area_course_ids,
+        electives=electives,
     )
 

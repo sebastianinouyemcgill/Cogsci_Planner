@@ -2,18 +2,17 @@
 
 ## Overview
 
-A degree-aware academic planning application designed specifically for McGill Cognitive Science students.
+A degree-aware academic planning application for McGill Cognitive Science students.
 
-The application models the Cognitive Science program as a graph of courses, prerequisites, streams, and degree requirements. It helps students build course plans while automatically evaluating whether their selections satisfy degree constraints.
+The application models the program as courses linked to areas, streams, prerequisites, and degree requirements. It helps students track progress and understand how their course selections allocate across competing buckets.
 
-The goal is not simply to store a list of courses, but to answer:
+The goal is not simply to list courses, but to answer:
 
-- Does my course selection satisfy my degree requirements?
-- Which requirements can this course satisfy?
-- How should my courses be allocated to maximize degree completion?
-- What courses should I take next?
-- Which streams am I progressing toward?
-- What pathways exist based on my interests?
+- Does my course selection satisfy degree requirements?
+- Which bucket does each course count toward?
+- How do I progress toward each stream?
+- What happens when I take two courses from the same core area?
+- How do Arts/Science and 400-level credits add up?
 
 ---
 
@@ -21,17 +20,15 @@ The goal is not simply to store a list of courses, but to answer:
 
 McGill Cognitive Science is flexible but difficult to plan because requirements overlap. Students must reason about:
 
-- 8 required Cognitive Science areas
-- 5 possible streams
-- Stream credit requirements
-- Complementary credits
-- 400-level course requirements
-- Arts and Science credit balance
-- Electives
-- Honours requirements
-- Course prerequisites
+- 8 required Cognitive Science areas (Core Complementary)
+- 5 streams (Computer Science, Neuroscience, Psychology, Linguistics, Philosophy)
+- Stream credits (18) and complementary credits (12) from stream-eligible courses
+- 400-level credits (15)
+- Arts and Science balance (21 each)
+- Electives (overflow from areas and official stream pool)
+- Honours research (optional, 6 credits)
 
-Existing university tools usually show requirements but don't explain relationships between courses or optimize course allocation. This application provides a visual, intelligent planning assistant.
+Existing university tools show requirements but rarely explain **allocation** — which bucket each course actually fills when credits cannot double-count.
 
 ---
 
@@ -40,143 +37,133 @@ Existing university tools usually show requirements but don't explain relationsh
 McGill Cognitive Science undergraduate students.
 
 **Initial scope:**
-- McGill Cognitive Science Major only
-- McGill course catalog only
-
-**Future possibility:**
-- Expand to other McGill programs
-- Expand to other universities
+- McGill Cognitive Science Major / Honours
+- McGill course catalog (seeded subset; full lists in `cogsci_course_catalogue.md`)
 
 ---
 
 ## Core Design Philosophy
 
-Courses are not simply labeled as "required," "stream," or "elective." Instead, **a course is a resource that can potentially satisfy different requirements**, and the system should optimize how courses are allocated across them.
+Courses are **resources** that may satisfy different requirements. The system allocates each course to at most one program bucket per allocation pass, then reports independent totals (400-level, Arts/Science).
 
-### Example: COMP551
+### Three-way classification (from official catalogue)
 
-| Attribute | Value |
+| Classification | Meaning |
 |---|---|
-| Credits | 3 |
-| Level | 500 |
-| Faculty | Science |
+| **Area-eligible** | Can fill one of the 8 Core Complementary slots |
+| **Stream-eligible** | Appears on a stream's Complementary Courses list |
+| **Electives-only** | Area-eligible but **not** on any stream list |
 
-**Possible contributions:**
-- ✓ Computer Science Stream
-- ✓ 400+ level requirement
-- ✓ Science credit requirement
+Stream tags are **not** inferred from area membership. Many core courses (e.g. `COMP 202`, `PSYC 211`) satisfy an area only.
 
-### Allocation Rules
+### Area overflow
 
-- A course **cannot** be double-counted for mutually exclusive requirements. For example, a 3-credit course cannot simultaneously count as both Stream credits and Complementary credits.
-- **Exception:** a course *can* satisfy both a program area requirement and the 400+ requirement, since the 400+ requirement is an additional, independent constraint rather than a competing bucket.
+Only **one** course per area counts toward the 24-credit area requirement. If a student takes a second course from the same area, that credit overflows to the **Electives** bucket instead of silently disappearing or auto-filling a stream.
+
+**Example:** `COMP 202` + `COMP 250` — both are Computer Science Foundations options. `COMP 250` is also on the CS stream list. One fills the area; the other can count toward the CS stream. If only area-eligible courses are taken, extras go to Electives.
+
+### Mutual exclusivity vs independence
+
+- **Mutually exclusive:** Official stream credits vs complementary credits; each course goes to one program bucket.
+- **Independent:** 400-level and Arts/Science totals — the same course can contribute to a program bucket and to these global tallies.
 
 ---
 
 ## Cognitive Science Degree Model
 
-### Total Credits
+Reference: `cogsci_course_catalogue.md` (McGill 2026–2027 Honours, 60 credits). Standard 54-credit major follows the same structural ideas with slightly different credit splits.
+
+### Program size
 
 | Program | Credits |
 |---|---|
-| Standard Cognitive Science Major | 54 |
-| Honours Cognitive Science | 60 |
+| Standard Major | 54 |
+| Honours | 60 |
 
-### 1. Required Cognitive Science Areas — 24 credits
+### 1. Required Cognitive Science Areas — 24 credits (planner view)
 
-Students must complete 8 required areas. Each area has 1–3 possible course options.
+Eight areas, one course each (3 credits × 8):
 
-**Example:**
-- Area: Artificial Intelligence
-- Possible courses: `COMP551`, `COMP550`
-
-The system tracks area completion (e.g., "Artificial Intelligence ✓ Completed").
-
-### 2. Stream Requirement — 18 credits
-
-Students complete coursework from one or more Cognitive Science streams:
-
-- Computer Science
-- Neuroscience
-- Psychology
-- Linguistics
-- Philosophy
-
-Students do **not** officially declare a stream — it's determined by the courses they complete. The app should show progress toward *every* stream simultaneously, and a student may satisfy multiple streams.
-
-**Example:**
-
-| Stream | Progress |
+| Area | Example options |
 |---|---|
-| Computer Science | 15 / 18 credits |
-| Neuroscience | 9 / 18 credits |
-| Psychology | 6 / 18 credits |
-| Linguistics | 3 / 18 credits |
-| Philosophy | 0 / 18 credits |
+| Neuroscience (Required) | `NSCI 201` |
+| Logic | `COMP 230`, `MATH 318`, `PHIL 210` |
+| Statistics | `MATH 203`, `MATH 323`, `PSYC 204` |
+| Computer Science Foundations | `COMP 202`, `COMP 204`, `COMP 250` |
+| Linguistics Foundations | `LING 201`, `LING 210`, `LING 260` |
+| Philosophy Foundations | `PHIL 200`, `PHIL 201`, `PHIL 203`, `PHIL 221` |
+| Neuroscience Foundations | `NSCI 200`, `PHGY 209`, `PSYC 211` |
+| Psychology Foundations | `PSYC 212`, `PSYC 213` |
 
-### 3. Complementary Requirement — 12 credits
+### 2. Stream requirement — 18 credits
 
-Complementary credits come from approved Cognitive Science coursework and must be tracked **separately** from stream credits. A course allocated to complementary cannot also be allocated to a stream.
+Credits from courses on **one** stream's complementary list. The dashboard shows:
 
-### 4. Advanced Course Requirement — 15 credits
+- **Explore bars** — progress toward all 5 streams simultaneously (what-if).
+- **Official allocation** — uses a declared stream (or provisional best-fit) for the 18 + 12 split.
 
-15 credits at the 400-level or above. This overlaps with other requirements and is tracked independently.
+Students may optionally declare a stream in the app; McGill does not require formal stream declaration.
 
-**Example:** COMP551 counts as both ✓ Computer Science Stream and ✓ 400+ level requirement.
+### 3. Complementary requirement — 12 credits
 
-### 5. Arts and Science Requirement
+Additional credits from stream-eligible courses, tracked separately from the 18-credit stream bucket in the official allocation.
 
-| Faculty | Minimum Credits |
-|---|---|
-| Arts | 21 |
-| Science | 21 |
+### 4. Advanced courses — 15 credits at 400+
 
-Every course has faculty metadata (Arts / Science). Importantly, Arts and Science credits are **not limited to Cognitive Science courses** — users should be able to manually enter completed non-major courses (e.g., `PHIL210`, `HIST200`).
+Tracked independently; overlaps with stream/area allocations.
 
-### 6. Honours Cognitive Science (optional)
+### 5. Arts and Science — 21 credits each
 
-Adds a 6-credit research requirement, completed either:
-- In one semester (6 credits), or
-- Across two semesters (3 + 3 credits)
+Faculty metadata on each course. Manual entry of non-major courses is supported for faculty totals.
+
+### 6. Electives bucket
+
+Visible credit pool for:
+
+- Area overflow (second+ course from same area)
+- Official stream-pool overflow (after stream + complementary caps)
+- Explicit electives-only and research courses (`COGS 401`, etc.)
+
+### 7. Honours (optional)
+
+6-credit research requirement (`COGS 444` when honours is enabled). Toggle in dashboard.
 
 ---
 
 ## Main Features
 
-### 1. Degree Dashboard (Main Interface)
+### 1. Degree Dashboard (implemented)
 
-The primary user experience — shows overall progress, required area completion, stream progress, advanced course progress, and Arts/Science completion at a glance.
+- Dual **completed** vs **projected** progress
+- Area completion
+- Stream exploration (all 5) + official stream/complementary
+- Electives, 400-level, Arts/Science, honours research
+- Per-course status (completed / planned)
+- Bucket override controls with validation errors
 
-### 2. Course Explorer
+### 2. Course Explorer (planned)
 
-Search and explore courses, viewing prerequisites, faculty, level, streams, and which requirements a course can satisfy.
+Search courses with prerequisites, streams, areas, and satisfiable requirements.
 
-### 3. Semester Planner
+### 3. Semester Planner (planned)
 
-Organize courses by semester. The system provides **non-blocking** warnings — e.g., flagging an unmet prerequisite — while still showing requirement impact. Students may take courses without prerequisites; warnings never block course selection.
+Organize courses by term; non-blocking prerequisite warnings.
 
-### 4. Requirement Allocation Engine
+### 4. Graph Visualization (planned)
 
-The core technical challenge: given a student's completed and planned courses, produce an **optimized allocation** of courses toward degree requirements, maximizing:
-
-- Completed requirements
-- Stream progress
-- Overall degree completion percentage
-
-Potential approaches: constraint satisfaction, optimization algorithms, graph algorithms.
+Prerequisite and stream pathway graphs.
 
 ---
 
 ## Data Model (Conceptual)
 
-- **Course** — id, code, title, description, credits, level, faculty, department
-- **Stream** — id, name (Computer Science, Neuroscience, Psychology, Linguistics, Philosophy)
-- **Course–Stream Relationship** — many-to-many (course_id, stream_id)
-- **Course Prerequisite Relationship** — self-referencing (course_id, required_course_id); warnings only, not restrictions
-- **Cognitive Science Area** — id, name (e.g., Artificial Intelligence, Language, Cognition, Perception)
-- **Area Courses** — (area_id, course_id) — defines which courses satisfy which required areas
-- **Requirement** — id, name, type, credits_required
-- **UserCourse** — user_id, course_id, status (completed / planned)
+- **Course** — code, title, credits, level, faculty, department, prerequisites
+- **Stream** — 5 Cognitive Science streams
+- **Area** — 8 Core Complementary categories
+- **Requirement** — degree rules (areas, stream, complementary, 400+, Arts, Science, honours)
+- **Relationships** — course↔stream, course↔area, course↔prerequisite (many-to-many where applicable)
+
+Seed source of truth: `backend/app/seed/cogsci_seed_data.py` (82 courses, expandable from catalogue).
 
 ---
 
@@ -184,51 +171,48 @@ Potential approaches: constraint satisfaction, optimization algorithms, graph al
 
 | Layer | Technology | Responsibilities |
 |---|---|---|
-| Frontend | React + TypeScript + Vite | Dashboard, course explorer, semester planner, graph visualization |
-| Backend | FastAPI | Course APIs, degree evaluation, allocation engine, optimization logic |
-| Database | PostgreSQL + SQLAlchemy ORM | Academic data storage |
+| Frontend | React + TypeScript + Vite | Dashboard, course status, overrides |
+| Backend | FastAPI | Course API, `degree_evaluator`, progress API |
+| Database | PostgreSQL + SQLAlchemy | Academic data storage |
 
-*(See `PROJECT_ARCHITECTURE.md` for full technical details.)*
+See `PROJECT_ARCHITECTURE.md` for file layout, allocation phases, and API contracts.
 
 ---
 
 ## Current Progress
 
 - ✓ Docker development environment
-- ✓ React frontend
-- ✓ FastAPI backend
-- ✓ PostgreSQL database
-- ✓ SQLAlchemy models
-- ✓ Course CRUD
-- ✓ Frontend-backend communication
-- ✓ Database seeding
+- ✓ Academic data model (courses, streams, areas, requirements, prerequisites)
+- ✓ Catalogue-aligned seed data with three-way course classification
+- ✓ Degree evaluation engine (greedy v1)
+- ✓ `POST /api/requirements/progress` with overrides, declared stream, honours
+- ✓ Dashboard UI
+- ✓ 38 backend unit/integration tests
 
 ---
 
 ## Development Roadmap
 
-### Phase 1: Academic Data Model
-Course metadata, streams, course-stream relationships, prerequisites, Cognitive Science areas, degree requirements. Seed McGill Cognitive Science courses and requirement rules.
+### Phase 1: Academic Data Model — largely complete
+Expand seeded course lists from `cogsci_course_catalogue.md` as needed.
 
-### Phase 2: Requirement Evaluation Engine
-Credit counting, stream progress calculation, Arts/Science tracking, 400-level tracking, Honours tracking, course allocation optimization.
+### Phase 2: Requirement Evaluation — largely complete
+Refinements possible (smarter optimization, standard vs honours program profiles).
 
 ### Phase 3: Semester Planner
-Add/remove courses, semester organization, requirement impact preview, prerequisite warnings.
+Term organization, prerequisite warnings, impact preview.
 
 ### Phase 4: Graph Visualization
-Prerequisite graph, stream graph, degree pathway visualization. Possible tech: React Flow, D3.js, Cytoscape.
+Prerequisite and stream graphs.
 
 ### Phase 5: Authentication
-OAuth login, user accounts, saved degree plans.
+User accounts, saved plans.
 
 ### Phase 6: AI Features
-Course recommendations, degree planning assistant, natural language queries.
-
-> Example: *"I want an AI/ML pathway while keeping neuroscience options open. What courses should I take?"*
+Recommendations, natural-language planning assistance.
 
 ---
 
 ## Long-Term Goal
 
-Create an intelligent academic planning system combining relational databases, graph modeling, constraint optimization, visualization, and AI reasoning to help students navigate complex degree structures.
+An intelligent planning system combining relational data, graph relationships, constraint-aware allocation, and visualization so students can navigate McGill Cognitive Science without manually reconciling overlapping requirements.

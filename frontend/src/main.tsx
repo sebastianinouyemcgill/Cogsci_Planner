@@ -4,15 +4,14 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.tsx";
 import { PlannerProvider } from "./context/PlannerContext";
-import { CompletedCoursesProvider } from "./context/CompletedCoursesContext";
-
+import { CourseStatusProvider } from "./context/CourseStatusContext";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <PlannerProvider>
-      <CompletedCoursesProvider>
+      <CourseStatusProvider>
         <App />
-      </CompletedCoursesProvider>
+      </CourseStatusProvider>
     </PlannerProvider>
   </StrictMode>,
 );

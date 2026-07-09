@@ -20,7 +20,7 @@ if [ -z "$ok" ]; then
 fi
 
 echo "==> Checking key routes return 200"
-for path in "/" "/courses" "/dashboard" "/planner"; do
+for path in "/" "/dashboard" "/planner"; do
   code="$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:5173${path}")"
   echo "    ${path} -> ${code}"
   if [ "$code" != "200" ]; then

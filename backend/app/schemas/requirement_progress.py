@@ -1,9 +1,10 @@
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 FacultyName = Literal["Arts", "Science"]
+CourseStatus = Literal["planned", "completed"]
 
 
 class ManualCompletedCourseInput(BaseModel):
@@ -20,16 +21,28 @@ class ManualCompletedCourseInput(BaseModel):
     level: int = Field(default=0, ge=0)
 
 
+class CourseProgressEntry(BaseModel):
+    """A DB course with its completion status."""
+
+    course_id: int
+    status: CourseStatus
+    bucket_override: Optional[str] = None
+
+
 class RequirementsProgressRequest(BaseModel):
     """
     Input contract for progress evaluation.
 
-    - `completed_course_ids`: IDs of completed courses from the DB.
+    - `courses`: DB courses with status `completed` or `planned`.
     - `manual_completed_courses`: extra completed courses that are not in the DB.
+    - `declared_stream`: when set, official Stream/Complementary allocation uses
+      only this stream; when null, a provisional stream is auto-selected.
     """
 
-    completed_course_ids: List[int] = []
+    courses: List[CourseProgressEntry] = []
     manual_completed_courses: List[ManualCompletedCourseInput] = []
+    honours_enabled: bool = False
+    declared_stream: Optional[str] = None
 
 
 class ArtsScienceProgress(BaseModel):
@@ -43,20 +56,64 @@ class LevelProgress(BaseModel):
     course_ids: List[int]
 
 
+class CourseBucketAllocation(BaseModel):
+    eligible_buckets: List[str]
+    allocated_bucket: Optional[str] = None
+
+
 class StreamComplementaryProgress(BaseModel):
     stream_credits: Dict[str, int]
     complementary_credits: int
     course_bucket: Dict[int, str]
+    course_allocations: Dict[int, CourseBucketAllocation]
+
+
+class OfficialStreamComplementaryProgress(BaseModel):
+    """Official declared/provisional stream + complementary allocation."""
+
+    declared_stream: Optional[str] = None
+    stream_is_provisional: bool
+    provisional_stream: Optional[str] = None
+    stream_credits: int
+    stream_credit_required: int = 18
+    complementary_credits: int
+    complementary_credit_required: int = 12
+    course_bucket: Dict[int, str]
+    course_allocations: Dict[int, CourseBucketAllocation]
+
+
+class ElectivesProgress(BaseModel):
+    credits: int
+    course_ids: List[int]
 
 
 class AreasProgress(BaseModel):
     required_areas: List[str]
     completed_areas: List[str]
+    area_course_ids: Dict[str, int]
 
 
-class RequirementsProgressResponse(BaseModel):
+class HonoursResearchProgress(BaseModel):
+    required_credits: int
+    credits: int
+    remaining_credits: int
+    course_ids: List[int]
+    satisfied: bool
+
+
+class RequirementProgressBreakdown(BaseModel):
+    """Progress computed from a single course set (completed-only or projected)."""
+
     arts_science: ArtsScienceProgress
     level_400_plus: LevelProgress
     stream_complementary: StreamComplementaryProgress
+    official_stream_complementary: OfficialStreamComplementaryProgress
+    electives: ElectivesProgress
     areas: AreasProgress
+    honours_research: Optional[HonoursResearchProgress] = None
+
+
+class RequirementsProgressResponse(BaseModel):
+    completed: RequirementProgressBreakdown
+    projected: RequirementProgressBreakdown
 

@@ -16,6 +16,17 @@ def _client_for_db(db):
     return TestClient(app)
 
 
+def _progress_keys():
+    return {
+        "arts_science",
+        "level_400_plus",
+        "stream_complementary",
+        "official_stream_complementary",
+        "electives",
+        "areas",
+    }
+
+
 def test_get_progress_contract_shape_returns_baseline(db):
     client = _client_for_db(db)
 
@@ -23,15 +34,13 @@ def test_get_progress_contract_shape_returns_baseline(db):
     assert response.status_code == 200
 
     payload = response.json()
-    assert set(payload.keys()) == {
-        "arts_science",
-        "level_400_plus",
-        "stream_complementary",
-        "areas",
-    }
-    assert payload["arts_science"]["arts_credits"] == 0
-    assert payload["arts_science"]["science_credits"] == 0
-    assert payload["level_400_plus"]["threshold"] == 400
+    assert set(payload.keys()) == {"completed", "projected"}
+
+    for view in ("completed", "projected"):
+        assert set(payload[view].keys()) == _progress_keys()
+        assert payload[view]["arts_science"]["arts_credits"] == 0
+        assert payload[view]["arts_science"]["science_credits"] == 0
+        assert payload[view]["level_400_plus"]["threshold"] == 400
 
 
 def test_post_progress_uses_db_courses_and_manual_courses(db):
@@ -52,7 +61,7 @@ def test_post_progress_uses_db_courses_and_manual_courses(db):
     response = client.post(
         "/api/requirements/progress",
         json={
-            "completed_course_ids": [db_course.id],
+            "courses": [{"course_id": db_course.id, "status": "completed"}],
             "manual_completed_courses": [
                 {
                     "code": "PHIL 210",
@@ -66,10 +75,10 @@ def test_post_progress_uses_db_courses_and_manual_courses(db):
     assert response.status_code == 200
     payload = response.json()
 
-    # Arts/science should include BOTH DB and manual completed courses.
-    assert payload["arts_science"]["arts_credits"] == 3
-    assert payload["arts_science"]["science_credits"] == 4
+    for view in ("completed", "projected"):
+        # Arts/science should include BOTH DB and manual completed courses.
+        assert payload[view]["arts_science"]["arts_credits"] == 3
+        assert payload[view]["arts_science"]["science_credits"] == 4
 
-    # 400+ should include COMP551 only.
-    assert payload["level_400_plus"]["credits"] == 4
-
+        # 400+ should include COMP551 only.
+        assert payload[view]["level_400_plus"]["credits"] == 4

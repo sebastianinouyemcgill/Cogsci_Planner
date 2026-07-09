@@ -73,7 +73,9 @@ def _link_course_streams(
     streams: dict[str, Stream],
 ) -> list[str]:
     warnings: list[str] = []
+    desired_by_course: dict[str, set[str]] = {code: set() for code in courses}
     for course_code, stream_name in data.COURSE_STREAMS:
+        desired_by_course.setdefault(course_code, set()).add(stream_name)
         course = courses.get(course_code)
         stream = streams.get(stream_name)
         if course is None or stream is None:
@@ -81,8 +83,16 @@ def _link_course_streams(
                 f"course_stream skipped: {course_code} -> {stream_name}"
             )
             continue
-        if stream not in course.streams:
-            course.streams.append(stream)
+
+    # Match seed data exactly when re-running, so corrected mappings remove
+    # stale tags from existing databases (for example PSYC 211 -> Psychology).
+    for course_code, course in courses.items():
+        desired_streams = [
+            streams[name]
+            for name in sorted(desired_by_course.get(course_code, set()))
+            if name in streams
+        ]
+        course.streams = desired_streams
     return warnings
 
 

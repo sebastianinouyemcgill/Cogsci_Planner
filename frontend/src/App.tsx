@@ -1,23 +1,18 @@
-import {
-  BrowserRouter,
-  Link,
-  Routes,
-  Route,
-} from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Routes, Route } from "react-router-dom";
 
-import CourseCatalog from "./pages/CourseCatalog";
 import Dashboard from "./pages/Dashboard";
 import Planner from "./pages/Planner";
-
 
 function App() {
   return (
     <BrowserRouter>
-
-      <div style={{ padding: 12, borderBottom: "1px solid #ddd", marginBottom: 10 }}>
-        <Link to="/courses" style={{ marginRight: 12 }}>
-          Courses
-        </Link>
+      <div
+        style={{
+          padding: 12,
+          borderBottom: "1px solid var(--border)",
+          marginBottom: 10,
+        }}
+      >
         <Link to="/dashboard" style={{ marginRight: 12 }}>
           Dashboard
         </Link>
@@ -25,24 +20,10 @@ function App() {
       </div>
 
       <Routes>
-
-        <Route
-          path="/courses"
-          element={<CourseCatalog />}
-        />
-
-        <Route
-          path="/dashboard"
-          element={<Dashboard />}
-        />
-
-        <Route
-          path="/planner"
-          element={<Planner />}
-        />
-
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/planner" element={<Planner />} />
       </Routes>
-
     </BrowserRouter>
   );
 }

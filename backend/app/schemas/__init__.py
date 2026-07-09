@@ -13,11 +13,17 @@ from app.schemas.requirement import (
 )
 from app.schemas.requirement_progress import (
     ManualCompletedCourseInput,
+    CourseProgressEntry,
     RequirementsProgressRequest,
     ArtsScienceProgress,
+    CourseBucketAllocation,
+    ElectivesProgress,
+    HonoursResearchProgress,
     LevelProgress,
     StreamComplementaryProgress,
     AreasProgress,
+    OfficialStreamComplementaryProgress,
+    RequirementProgressBreakdown,
     RequirementsProgressResponse,
 )
 
@@ -36,10 +42,16 @@ __all__ = [
     "RequirementCreate",
     "RequirementResponse",
     "ManualCompletedCourseInput",
+    "CourseProgressEntry",
     "RequirementsProgressRequest",
     "ArtsScienceProgress",
+    "CourseBucketAllocation",
+    "ElectivesProgress",
+    "HonoursResearchProgress",
     "LevelProgress",
     "StreamComplementaryProgress",
     "AreasProgress",
+    "OfficialStreamComplementaryProgress",
+    "RequirementProgressBreakdown",
     "RequirementsProgressResponse",
 ]
