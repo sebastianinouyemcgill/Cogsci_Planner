@@ -4,8 +4,9 @@
 
 Use these commands from the repo root:
 
-- `make dev-up` — start `db`, `backend`, and `frontend`
+- `make dev-up` — start `db`, `backend`, and `frontend` (rebuilds images, syncs frontend deps)
 - `make dev-down` — stop the stack
+- `make dev-restart` — stop then start (use after `package.json` or Docker changes)
 - `make migrate` — apply Alembic migrations
 - `make seed` — seed academic data
 - `make test-backend` — run backend pytest suite

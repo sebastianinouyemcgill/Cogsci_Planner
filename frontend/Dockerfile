@@ -10,4 +10,5 @@ COPY . .
 
 EXPOSE 5173
 
-CMD ["npm", "run", "dev", "--", "--host"]
+# Re-install on start so the node_modules volume stays in sync with package.json.
+CMD ["sh", "-c", "npm install && npm run dev -- --host --port 5173"]

@@ -3,7 +3,7 @@ import type { Course, CourseCreateInput } from "../types/course";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export async function getCourses(): Promise<Course[]> {
-  const response = await fetch(`${API_URL}/api/courses`);
+  const response = await fetch(`${API_URL}/api/courses/`);
   if (!response.ok) {
     throw new Error(`Failed to fetch courses: ${response.status}`);
   }
